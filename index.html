@@ -485,11 +485,26 @@ tbody td{
       <span>WORKAGENT PORTAL</span>
     </div>
     <h1 class="login-title">Welcome back</h1>
-    <p class="login-sub">Sign in with your Telegram account to access your shift dashboard and performance data.</p>
+    <p class="login-sub">Enter your Telegram username and 6-digit PIN to access your dashboard.</p>
 
-    <button class="tg-btn" onclick="telegramLogin()">
-      <svg class="tg-icon" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.448 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.37l-2.95-.924c-.64-.203-.658-.64.135-.954l11.57-4.461c.537-.194 1.006.131.97.19z"/></svg>
-      Continue with Telegram
+    <div style="margin-bottom:16px">
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;letter-spacing:0.05em">TELEGRAM USERNAME</label>
+      <input id="login-username" type="text" placeholder="@username"
+        style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;color:var(--text);font-size:15px;outline:none;font-family:var(--sans)"
+        onkeydown="if(event.key==='Enter')document.getElementById('login-pin').focus()">
+    </div>
+
+    <div style="margin-bottom:20px">
+      <label style="display:block;font-size:12px;color:var(--muted);margin-bottom:6px;letter-spacing:0.05em">6-DIGIT PIN</label>
+      <input id="login-pin" type="password" placeholder="••••••" maxlength="6"
+        style="width:100%;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;padding:12px 14px;color:var(--text);font-size:15px;outline:none;font-family:var(--sans);letter-spacing:0.3em"
+        onkeydown="if(event.key==='Enter')telegramLogin()">
+    </div>
+
+    <div id="login-error" style="color:var(--danger);font-size:13px;margin-bottom:12px;min-height:18px;text-align:center"></div>
+
+    <button id="login-btn" class="tg-btn" onclick="telegramLogin()" style="width:100%;justify-content:center">
+      Sign In
     </button>
 
     <div class="login-divider">── or ──</div>
@@ -727,78 +742,76 @@ tbody td{
 <div class="toast" id="toast"></div>
 
 <script>
+<script>
+const BOT_URL = 'https://zesty-eagerness-production-1a30.up.railway.app';
+
 // ══════════════════════════════════════════════════════════════════════════════
 // STATE
 // ══════════════════════════════════════════════════════════════════════════════
+const STATE = { user: null, shifts: [], perfLogs: [] };
 
-const STATE = {
-  user: null,
-  shifts: [],
-  perfLogs: [],
-};
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTH — real login via bot /portal-login endpoint
+// ══════════════════════════════════════════════════════════════════════════════
 
-// ── Demo data ─────────────────────────────────────────────────────────────────
-function generateDemoData() {
-  const now = Date.now();
-  const day  = 86400000;
-  const shifts = [];
-  const perfs  = [];
+async function telegramLogin() {
+  const username = document.getElementById('login-username').value.trim();
+  const pin      = document.getElementById('login-pin').value.trim();
+  const errEl    = document.getElementById('login-error');
+  const btn      = document.getElementById('login-btn');
 
-  const scores = [91,87,76,95,88,82,93,78,89,96,84,72,90,88,91];
+  errEl.textContent = '';
 
-  for (let i = 0; i < 12; i++) {
-    const start  = new Date(now - (i + 1) * day * 1.3);
-    const end    = new Date(start.getTime() + (6 + Math.random() * 3) * 3600000);
-    const score  = scores[i] ?? Math.floor(70 + Math.random() * 28);
-    const sentD  = 80 + Math.floor(Math.random() * 60);
-    const recvD  = Math.round(sentD * score / 100);
-    const sId    = 'shift-' + i;
-    shifts.push({
-      id:          sId,
-      pc_label:    `PC-0${(i % 5) + 1}`,
-      start_time:  start.toISOString(),
-      end_time:    end.toISOString(),
-      status:      'completed',
-      duration_h:  ((end - start) / 3600000).toFixed(1),
+  if (!username) { errEl.textContent = 'Please enter your Telegram username.'; return; }
+  if (!/^\d{6}$/.test(pin)) { errEl.textContent = 'PIN must be exactly 6 digits.'; return; }
+
+  btn.disabled    = true;
+  btn.textContent = 'Signing in…';
+
+  try {
+    const resp = await fetch(`${BOT_URL}/portal-login`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ username, pin }),
     });
-    perfs.push({
-      id:                 'perf-' + i,
-      shift_id:           sId,
-      shift_date:         start.toISOString(),
-      start_sent:         200 + i * 40,
-      start_received:     180 + i * 35,
-      end_sent:           200 + i * 40 + sentD,
-      end_received:       180 + i * 35 + recvD,
-      final_percentage:   score,
-    });
+    const data = await resp.json();
+
+    if (!data.granted) {
+      errEl.textContent = data.reason || 'Login failed.';
+      btn.disabled    = false;
+      btn.textContent = 'Sign In';
+      return;
+    }
+
+    // Store session
+    sessionStorage.setItem('wa_user',   JSON.stringify(data.worker));
+    sessionStorage.setItem('wa_shifts', JSON.stringify(data.shifts));
+    sessionStorage.setItem('wa_perfs',  JSON.stringify(data.perfs));
+
+    loadSession(data.worker, data.shifts, data.perfs);
+
+  } catch (e) {
+    errEl.textContent = 'Cannot reach server. Try again.';
+    btn.disabled    = false;
+    btn.textContent = 'Sign In';
   }
-  return { shifts, perfs };
 }
 
-// ══════════════════════════════════════════════════════════════════════════════
-// AUTH
-// ══════════════════════════════════════════════════════════════════════════════
-
-function telegramLogin() {
-  // In production: window.location = 'https://your-next-app.com/api/auth/telegram'
-  showToast('Telegram OAuth would redirect here in production.');
-  demoLogin();
-}
-
-function demoLogin() {
-  const { shifts, perfs } = generateDemoData();
+function loadSession(worker, shifts, perfs) {
+  const name = worker.telegram_username || 'Worker';
   STATE.user = {
-    name:     'Demo Worker',
-    username: '@demo_worker',
-    initials: 'DW',
-    mpesa_number: '0712345678',
-    mpesa_name:   'Demo Worker',
+    name:         name,
+    username:     '@' + name.replace(/^@/, ''),
+    initials:     name.replace(/^@/, '').slice(0, 2).toUpperCase(),
+    mpesa_number: worker.mpesa_number || '',
+    mpesa_name:   worker.mpesa_name   || '',
+    id:           worker.id,
   };
   STATE.shifts   = shifts;
   STATE.perfLogs = perfs;
 
   document.getElementById('login-screen').style.display = 'none';
-  document.getElementById('app').style.display = 'block';
+  document.getElementById('app').style.display          = 'block';
 
   populateUser();
   renderDashboard();
@@ -808,16 +821,55 @@ function demoLogin() {
   setGreeting();
 }
 
+function demoLogin() {
+  const { shifts, perfs } = generateDemoData();
+  loadSession(
+    { telegram_username: 'demo_worker', mpesa_number: '0712345678', mpesa_name: 'Demo Worker', id: null },
+    shifts, perfs
+  );
+}
+
 function logout() {
-  document.getElementById('login-screen').style.display = 'flex';
-  document.getElementById('app').style.display = 'none';
+  sessionStorage.clear();
   STATE.user = null;
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display          = 'none';
+  document.getElementById('login-username').value = '';
+  document.getElementById('login-pin').value      = '';
+}
+
+// Auto-restore session on page reload
+window.addEventListener('load', () => {
+  const w = sessionStorage.getItem('wa_user');
+  const s = sessionStorage.getItem('wa_shifts');
+  const p = sessionStorage.getItem('wa_perfs');
+  if (w && s && p) loadSession(JSON.parse(w), JSON.parse(s), JSON.parse(p));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DEMO DATA
+// ══════════════════════════════════════════════════════════════════════════════
+function generateDemoData() {
+  const now    = Date.now();
+  const day    = 86400000;
+  const scores = [92, 88, 76, 95, 83, 91, 79, 86, 94, 88];
+  const shifts = [], perfs = [];
+  for (let i = 0; i < 10; i++) {
+    const start = new Date(now - (i + 1) * day * 1.3);
+    const end   = new Date(start.getTime() + (6 + Math.random() * 3) * 3600000);
+    const score = scores[i] ?? Math.floor(70 + Math.random() * 28);
+    const sentD = 80 + Math.floor(Math.random() * 60);
+    const recvD = Math.round(sentD * score / 100);
+    const sId   = 'shift-' + i;
+    shifts.push({ id: sId, pc_label: `PC-0${(i % 5) + 1}`, start_time: start.toISOString(), end_time: end.toISOString(), status: 'completed', duration_h: ((end - start) / 3600000).toFixed(1) });
+    perfs.push({ id: 'perf-' + i, shift_id: sId, shift_date: start.toISOString(), start_sent: 200 + i * 40, start_received: 180 + i * 35, end_sent: 200 + i * 40 + sentD, end_received: 180 + i * 35 + recvD, final_percentage: score });
+  }
+  return { shifts, perfs };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // NAVIGATION
 // ══════════════════════════════════════════════════════════════════════════════
-
 function showPage(id, navEl) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
@@ -828,7 +880,6 @@ function showPage(id, navEl) {
 // ══════════════════════════════════════════════════════════════════════════════
 // RENDER HELPERS
 // ══════════════════════════════════════════════════════════════════════════════
-
 function setGreeting() {
   const h = new Date().getHours();
   const g = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
@@ -842,191 +893,98 @@ function populateUser() {
   document.getElementById('sidebar-role').textContent   = u.username;
 }
 
-function fmtDate(iso) {
-  return new Date(iso).toLocaleDateString('en-KE', {day:'2-digit',month:'short',year:'numeric'});
-}
-function fmtTime(iso) {
-  return new Date(iso).toLocaleTimeString('en-KE', {hour:'2-digit',minute:'2-digit'});
-}
-
-function scoreClass(s) {
-  if (s === null || s === undefined) return 'none';
-  return s >= 85 ? 'good' : s >= 70 ? 'warn' : 'bad';
-}
+function fmtDate(iso) { return new Date(iso).toLocaleDateString('en-KE', { day: '2-digit', month: 'short', year: 'numeric' }); }
+function fmtTime(iso) { return new Date(iso).toLocaleTimeString('en-KE', { hour: '2-digit', minute: '2-digit' }); }
+function scoreClass(s) { if (s === null || s === undefined) return 'none'; return s >= 85 ? 'good' : s >= 70 ? 'warn' : 'bad'; }
 function scorePill(s) {
-  if (s === null || s === undefined)
-    return `<span class="score-pill none">No data</span>`;
+  if (s === null || s === undefined) return `<span class="score-pill none">No data</span>`;
   const cls = scoreClass(s);
   const dot = cls === 'good' ? '●' : cls === 'warn' ? '◐' : '○';
-  return `<span class="score-pill ${cls}">${dot} ${Number(s).toFixed(1)}%</span>`;
-}
-
-function statusBadge(status) {
-  const m = {active:'active',completed:'completed',denied:'denied'};
-  const c = m[status] || 'completed';
-  return `<span><span class="status-dot ${c}"></span>${status}</span>`;
+  return `<span class="score-pill ${cls}">${dot} ${s.toFixed(1)}%</span>`;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DASHBOARD
 // ══════════════════════════════════════════════════════════════════════════════
-
 function renderDashboard() {
-  const shifts = STATE.shifts;
-  const perfs  = STATE.perfLogs;
+  const perfs    = STATE.perfLogs.filter(p => p.final_percentage != null);
+  const avg      = perfs.length ? (perfs.reduce((a, b) => a + parseFloat(b.final_percentage), 0) / perfs.length).toFixed(1) : '—';
+  const best     = perfs.length ? Math.max(...perfs.map(p => parseFloat(p.final_percentage))).toFixed(1) : '—';
+  const total    = STATE.shifts.length;
+  const lastPerf = perfs[0];
 
-  const totalShifts = shifts.length;
-  const scores = perfs.map(p => p.final_percentage).filter(s => s != null);
-  const avg    = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null;
-  const best   = scores.length ? Math.max(...scores).toFixed(1) : null;
-  const hours  = shifts.reduce((a,s) => a + parseFloat(s.duration_h||0), 0).toFixed(0);
+  document.getElementById('dash-avg').textContent   = avg !== '—' ? avg + '%' : '—';
+  document.getElementById('dash-best').textContent  = best !== '—' ? best + '%' : '—';
+  document.getElementById('dash-total').textContent = total;
+  document.getElementById('dash-last').textContent  = lastPerf ? lastPerf.final_percentage.toFixed(1) + '%' : '—';
 
-  document.getElementById('stat-shifts').textContent = totalShifts;
-  document.getElementById('stat-avg').innerHTML    = avg ? `${avg}<span class="stat-unit">%</span>` : '—';
-  document.getElementById('stat-best').innerHTML   = best ? `${best}<span class="stat-unit">%</span>` : '—';
-  document.getElementById('stat-hours').innerHTML  = `${hours}<span class="stat-unit">h</span>`;
-
-  if (avg >= 85) {
-    document.getElementById('stat-avg').closest('.stat-card').style.setProperty('--accent-color','#34d399');
-  } else if (avg) {
-    document.getElementById('stat-avg').closest('.stat-card').style.setProperty('--accent-color','#f59e0b');
-  }
-
-  // Bar chart — last 7 perfs
-  const last7 = perfs.slice(0,7).reverse();
-  const barsEl  = document.getElementById('score-bars');
-  const lblsEl  = document.getElementById('score-bar-labels');
-  const maxScore = Math.max(...last7.map(p=>p.final_percentage||0), 100);
-
-  barsEl.innerHTML = last7.map(p => {
-    const s   = p.final_percentage || 0;
-    const pct = (s / maxScore * 100).toFixed(0);
-    const col = s >= 85 ? 'var(--success)' : s >= 70 ? 'var(--warning)' : 'var(--danger)';
-    return `<div class="bar-col" data-val="${s.toFixed(1)}%"
-      style="height:${pct}%;background:${col};opacity:0.8"></div>`;
-  }).join('');
-
-  lblsEl.innerHTML = last7.map(p => {
-    const d = new Date(p.shift_date);
-    return `<span class="bar-lbl">${d.getDate()}/${d.getMonth()+1}</span>`;
-  }).join('');
-
-  // Recent shifts
-  const recent = shifts.slice(0,5);
-  document.getElementById('recent-count').textContent = `${totalShifts} shift${totalShifts!==1?'s':''}`;
-  const tbody = document.getElementById('recent-tbody');
-  if (!recent.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>`;
-    return;
-  }
-  tbody.innerHTML = recent.map(s => {
-    const perf = perfs.find(p => p.shift_id === s.id);
+  // Recent shifts table
+  const recent = STATE.shifts.slice(0, 5);
+  document.getElementById('dash-recent').innerHTML = recent.length ? recent.map(s => {
+    const perf = STATE.perfLogs.find(p => p.shift_id === s.id);
     const score = perf ? perf.final_percentage : null;
     return `<tr>
       <td>${fmtDate(s.start_time)}</td>
-      <td class="td-mono">${s.pc_label}</td>
-      <td class="td-muted">${s.duration_h}h</td>
+      <td>${s.pc_label || '—'}</td>
+      <td>${fmtTime(s.start_time)} – ${s.end_time ? fmtTime(s.end_time) : 'Active'}</td>
       <td>${scorePill(score)}</td>
-      <td>${statusBadge(s.status)}</td>
     </tr>`;
-  }).join('');
+  }).join('') : '<tr><td colspan="4" style="text-align:center;color:var(--muted)">No shifts yet</td></tr>';
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SHIFTS TABLE
+// SHIFTS
 // ══════════════════════════════════════════════════════════════════════════════
-
 function renderShifts() {
-  const shifts = STATE.shifts;
-  const perfs  = STATE.perfLogs;
-  document.getElementById('shifts-count').textContent = `${shifts.length} shift${shifts.length!==1?'s':''}`;
-
-  const tbody = document.getElementById('shifts-tbody');
-  if (!shifts.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = shifts.map(s => {
-    const perf  = perfs.find(p => p.shift_id === s.id);
+  const list = document.getElementById('shifts-list');
+  if (!STATE.shifts.length) { list.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px">No shifts recorded yet.</p>'; return; }
+  list.innerHTML = STATE.shifts.map(s => {
+    const perf  = STATE.perfLogs.find(p => p.shift_id === s.id);
     const score = perf ? perf.final_percentage : null;
-    const sentD = perf ? perf.end_sent   - perf.start_sent   : '—';
-    const recvD = perf ? perf.end_received - perf.start_received : '—';
-    return `<tr>
-      <td class="td-mono td-muted">${s.id.slice(-8)}</td>
-      <td>${fmtDate(s.start_time)}<br><span class="td-mono td-muted" style="font-size:11px">${fmtTime(s.start_time)}</span></td>
-      <td class="td-mono">${s.pc_label}</td>
-      <td class="td-muted">${s.duration_h}h</td>
-      <td class="td-mono">${typeof sentD==='number' ? sentD : '—'}</td>
-      <td class="td-mono">${typeof recvD==='number' ? recvD : '—'}</td>
-      <td>${scorePill(score)}</td>
-      <td>${statusBadge(s.status)}</td>
-    </tr>`;
+    const dur   = s.end_time ? ((new Date(s.end_time) - new Date(s.start_time)) / 3600000).toFixed(1) + 'h' : 'Active';
+    return `<div class="shift-card">
+      <div class="shift-meta">
+        <span class="shift-pc">${s.pc_label || 'Unknown PC'}</span>
+        <span class="shift-date">${fmtDate(s.start_time)}</span>
+        <span class="shift-time">${fmtTime(s.start_time)} – ${s.end_time ? fmtTime(s.end_time) : '—'}</span>
+        <span class="shift-dur">${dur}</span>
+      </div>
+      <div>${scorePill(score)}</div>
+    </div>`;
   }).join('');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PERFORMANCE
 // ══════════════════════════════════════════════════════════════════════════════
-
 function renderPerformance() {
-  const perfs = STATE.perfLogs;
-  const scores = perfs.map(p=>p.final_percentage).filter(s=>s!=null);
-
-  const passing = scores.filter(s => s >= 85).length;
-  const failing = scores.filter(s => s < 85).length;
-  const avg     = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null;
-  const rate    = scores.length ? ((passing/scores.length)*100).toFixed(0) : null;
-
-  // Streak: consecutive recent shifts ≥ 85
-  let streak = 0;
-  for (const p of perfs) {
-    if ((p.final_percentage||0) >= 85) streak++;
-    else break;
-  }
-
-  document.getElementById('perf-passing').textContent = passing;
-  document.getElementById('perf-failing').textContent = failing;
-  document.getElementById('perf-avg').innerHTML = avg ? `${avg}<span class="stat-unit">%</span>` : '—';
-  document.getElementById('perf-streak').textContent = streak;
-  document.getElementById('perf-rate').textContent = rate ? `${rate}% pass rate` : '—';
-  document.getElementById('perf-rate').className = 'stat-change ' + (rate >= 85 ? 'up' : 'down');
-
-  const tbody = document.getElementById('perf-tbody');
-  if (!perfs.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No performance data yet</div></td></tr>`;
-    return;
-  }
-
-  tbody.innerHTML = perfs.map(p => {
-    const s    = p.final_percentage;
-    const sentD = p.end_sent - p.start_sent;
-    const recvD = p.end_received - p.start_received;
-    const barW  = s ? Math.min(s,100) : 0;
-    const barC  = s >= 85 ? 'var(--success)' : s >= 70 ? 'var(--warning)' : 'var(--danger)';
-    return `<tr>
-      <td>${fmtDate(p.shift_date)}</td>
-      <td class="td-mono td-muted">${p.shift_id.slice(-8)}</td>
-      <td class="td-mono">${p.start_sent} / ${p.start_received}</td>
-      <td class="td-mono">${p.end_sent} / ${p.end_received}</td>
-      <td class="td-mono">${sentD}</td>
-      <td class="td-mono">${recvD}</td>
-      <td>${scorePill(s)}</td>
-      <td>
-        <div class="score-bar-wrap">
-          <div class="score-bar" style="width:${barW}%;background:${barC}"></div>
-        </div>
-      </td>
-    </tr>`;
+  const list = document.getElementById('perf-list');
+  if (!STATE.perfLogs.length) { list.innerHTML = '<p style="color:var(--muted);text-align:center;padding:40px">No performance data yet.</p>'; return; }
+  list.innerHTML = STATE.perfLogs.map(p => {
+    const shift    = STATE.shifts.find(s => s.id === p.shift_id);
+    const sentDiff = (p.end_sent     || 0) - (p.start_sent     || 0);
+    const recvDiff = (p.end_received || 0) - (p.start_received || 0);
+    return `<div class="perf-card">
+      <div class="perf-header">
+        <span>${fmtDate(p.shift_date || p.created_at || '')}</span>
+        <span>${shift ? shift.pc_label : ''}</span>
+        ${scorePill(p.final_percentage)}
+      </div>
+      <div class="perf-stats">
+        <div class="perf-stat"><span class="perf-stat-val">${sentDiff}</span><span class="perf-stat-lbl">Sent</span></div>
+        <div class="perf-stat"><span class="perf-stat-val">${recvDiff}</span><span class="perf-stat-lbl">Received</span></div>
+        <div class="perf-stat"><span class="perf-stat-val">${p.final_percentage != null ? p.final_percentage.toFixed(1) + '%' : '—'}</span><span class="perf-stat-lbl">Score</span></div>
+      </div>
+    </div>`;
   }).join('');
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PAYMENT
 // ══════════════════════════════════════════════════════════════════════════════
-
 function renderPayment() {
   const u = STATE.user;
+  if (!u) return;
   document.getElementById('mpesa-number').value = u.mpesa_number || '';
   document.getElementById('mpesa-name').value   = u.mpesa_name   || '';
   document.getElementById('tg-username').value  = u.username     || '';
@@ -1043,24 +1001,40 @@ async function savePayment() {
     return;
   }
 
-  // In production: POST to /api/worker/payment with Supabase RLS ensuring worker owns the row
   status.style.color = 'var(--muted)';
   status.textContent = 'Saving…';
 
-  await new Promise(r => setTimeout(r, 800)); // simulate network
-
-  STATE.user.mpesa_number = number;
-  STATE.user.mpesa_name   = name;
-  status.style.color = 'var(--success)';
-  status.textContent = '✓ Saved';
-  showToast('M-Pesa details saved successfully.');
-  setTimeout(() => { status.textContent = '' }, 3000);
+  try {
+    const resp = await fetch(`${BOT_URL}/portal-payment`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({
+        username:     STATE.user.username,
+        mpesa_number: number,
+        mpesa_name:   name,
+      }),
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      STATE.user.mpesa_number = number;
+      STATE.user.mpesa_name   = name;
+      status.style.color = 'var(--success)';
+      status.textContent = '✓ Saved';
+      showToast('M-Pesa details saved successfully.');
+    } else {
+      status.style.color = 'var(--danger)';
+      status.textContent = data.error || 'Failed to save.';
+    }
+  } catch (e) {
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Cannot reach server.';
+  }
+  setTimeout(() => { status.textContent = ''; }, 3000);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
 // TOAST
 // ══════════════════════════════════════════════════════════════════════════════
-
 function showToast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
