@@ -2,14 +2,15 @@
 AUTO-SUPERVISOR WORKFORCE ECOSYSTEM
 Telegram Bot — Supervisor & Access Controller
 
+Adapted for Neon (serverless PostgreSQL) — uses asyncpg instead of supabase-py.
+
 Dependencies:
-    pip install python-telegram-bot supabase bcrypt python-dotenv
+    pip install python-telegram-bot asyncpg bcrypt python-dotenv aiohttp
 
 Environment variables (.env):
     TELEGRAM_BOT_TOKEN=...
     MANAGER_CHAT_ID=...
-    SUPABASE_URL=...
-    SUPABASE_SERVICE_KEY=...
+    DATABASE_URL=postgresql://user:password@ep-xxx.neon.tech/neondb?sslmode=require
 """
 
 import os
@@ -19,22 +20,22 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-from supabase import create_client, Client
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+import asyncpg
+from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    Application, CommandHandler,
     CallbackQueryHandler, ContextTypes, filters
 )
 
 load_dotenv()
 
 # ── Config ────────────────────────────────────────────────────────────────────
-BOT_TOKEN       = os.environ["TELEGRAM_BOT_TOKEN"]
-MANAGER_CHAT_ID = int(os.environ["MANAGER_CHAT_ID"])
-SUPABASE_URL    = os.environ["SUPABASE_URL"]
-SUPABASE_KEY    = os.environ["SUPABASE_SERVICE_KEY"]  # service role — bypasses RLS
+BOT_TOKEN         = os.environ["TELEGRAM_BOT_TOKEN"]
+MANAGER_CHAT_ID   = int(os.environ["MANAGER_CHAT_ID"])
+DATABASE_URL      = os.environ["DATABASE_URL"]   # Neon connection string
 
-MIN_QUALITY_SCORE = 85.0  # minimum previous-shift score to unlock
+MIN_QUALITY_SCORE = 85.0
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -42,8 +43,20 @@ logging.basicConfig(
 )
 log = logging.getLogger("supervisor-bot")
 
-# ── Supabase client ───────────────────────────────────────────────────────────
-sb: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ── Connection pool (created once at startup) ─────────────────────────────────
+_pool: asyncpg.Pool | None = None
+
+async def get_pool() -> asyncpg.Pool:
+    global _pool
+    if _pool is None:
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=1,
+            max_size=5,
+            ssl="require",          # Neon requires SSL
+            command_timeout=10,
+        )
+    return _pool
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -69,64 +82,61 @@ def check_pin(pin: str, hashed: str) -> bool:
     return bcrypt.checkpw(pin.encode(), hashed.encode())
 
 
-def get_worker_by_username(username: str) -> dict | None:
-    result = (
-        sb.table("workers")
-        .select("*")
-        .eq("telegram_username", username.lstrip("@"))
-        .maybe_single()
-        .execute()
+async def get_worker_by_username(username: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM workers WHERE telegram_username = $1",
+        username.lstrip("@")
     )
-    return result.data
+    return dict(row) if row else None
 
 
-def get_worker_by_chat_id(chat_id: int) -> dict | None:
-    result = (
-        sb.table("workers")
-        .select("*")
-        .eq("telegram_chat_id", chat_id)
-        .maybe_single()
-        .execute()
+async def get_worker_by_chat_id(chat_id: int) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM workers WHERE telegram_chat_id = $1", chat_id
     )
-    return result.data
+    return dict(row) if row else None
 
 
-def get_active_shift(worker_id: str) -> dict | None:
-    result = (
-        sb.table("shifts")
-        .select("*, pcs(*)")
-        .eq("worker_id", worker_id)
-        .eq("status", "active")
-        .maybe_single()
-        .execute()
+async def get_active_shift(worker_id: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT s.*, p.hwid AS pc_hwid, p.label AS pc_label, p.status AS pc_status
+        FROM shifts s
+        JOIN pcs p ON p.id = s.pc_id
+        WHERE s.worker_id = $1 AND s.status = 'active'
+        """,
+        worker_id
     )
-    return result.data
+    if not row:
+        return None
+    d = dict(row)
+    # Nest pc info to match original code's shift["pcs"] pattern
+    d["pcs"] = {"hwid": d.pop("pc_hwid"), "label": d.pop("pc_label"), "status": d.pop("pc_status")}
+    return d
 
 
-def get_last_shift_score(worker_id: str) -> float | None:
-    """Return the final_percentage of the most recent COMPLETED shift."""
-    result = (
-        sb.table("performance_logs")
-        .select("final_percentage")
-        .eq("worker_id", worker_id)
-        .order("created_at", desc=True)
-        .limit(1)
-        .execute()
+async def get_last_shift_score(worker_id: str) -> float | None:
+    pool = await get_pool()
+    row = await pool.fetchrow(
+        """
+        SELECT final_percentage FROM performance_logs
+        WHERE worker_id = $1
+        ORDER BY created_at DESC LIMIT 1
+        """,
+        worker_id
     )
-    if result.data:
-        return result.data[0].get("final_percentage")
-    return None  # No history → treat as first shift → allow
+    if row and row["final_percentage"] is not None:
+        return float(row["final_percentage"])
+    return None
 
 
-def get_pc_by_hwid(hwid: str) -> dict | None:
-    result = (
-        sb.table("pcs")
-        .select("*")
-        .eq("hwid", hwid)
-        .maybe_single()
-        .execute()
-    )
-    return result.data
+async def get_pc_by_hwid(hwid: str) -> dict | None:
+    pool = await get_pool()
+    row = await pool.fetchrow("SELECT * FROM pcs WHERE hwid = $1", hwid)
+    return dict(row) if row else None
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -135,7 +145,7 @@ def get_pc_by_hwid(hwid: str) -> dict | None:
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    existing = get_worker_by_chat_id(user.id)
+    existing = await get_worker_by_chat_id(user.id)
     if existing:
         await update.message.reply_text(
             f"✅ You're already registered as *{existing['telegram_username']}*.\n"
@@ -145,10 +155,15 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     username = user.username or f"user_{user.id}"
-    sb.table("workers").upsert({
-        "telegram_username": username,
-        "telegram_chat_id": user.id,
-    }, on_conflict="telegram_username").execute()
+    pool = await get_pool()
+    await pool.execute(
+        """
+        INSERT INTO workers (telegram_username, telegram_chat_id)
+        VALUES ($1, $2)
+        ON CONFLICT (telegram_username) DO UPDATE SET telegram_chat_id = EXCLUDED.telegram_chat_id
+        """,
+        username, user.id
+    )
 
     await update.message.reply_text(
         f"👋 Welcome, *@{username}*!\n\n"
@@ -165,7 +180,7 @@ async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /stats [Sent] [Received]  — worker reports their numbers
+# /stats [Sent] [Received]
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -190,33 +205,29 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Values cannot be negative.")
         return
 
-    worker = get_worker_by_chat_id(user.id)
+    worker = await get_worker_by_chat_id(user.id)
     if not worker:
         await update.message.reply_text("❌ You're not registered. Send /start first.")
         return
 
-    shift = get_active_shift(worker["id"])
+    shift = await get_active_shift(worker["id"])
     if not shift:
         await update.message.reply_text("❌ You have no active shift to report stats for.")
         return
 
-    # Upsert performance_log — if log exists update end stats, else set start stats
-    existing_log = (
-        sb.table("performance_logs")
-        .select("*")
-        .eq("shift_id", shift["id"])
-        .maybe_single()
-        .execute()
-    ).data
+    pool = await get_pool()
+    existing_log = await pool.fetchrow(
+        "SELECT * FROM performance_logs WHERE shift_id = $1", shift["id"]
+    )
 
     if not existing_log:
-        # First report = set start stats
-        sb.table("performance_logs").insert({
-            "worker_id":      worker["id"],
-            "shift_id":       shift["id"],
-            "start_sent":     sent,
-            "start_received": received,
-        }).execute()
+        await pool.execute(
+            """
+            INSERT INTO performance_logs (worker_id, shift_id, start_sent, start_received)
+            VALUES ($1, $2, $3, $4)
+            """,
+            worker["id"], shift["id"], sent, received
+        )
         await update.message.reply_text(
             f"📊 *Start stats recorded!*\n"
             f"Sent: `{sent}` | Received: `{received}`\n\n"
@@ -224,21 +235,24 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     else:
-        # Subsequent report = update end stats + calculate score
         start_sent     = existing_log["start_sent"]
         start_received = existing_log["start_received"]
         score          = calc_score(start_sent, start_received, sent, received)
 
-        update_data = {
-            "end_sent":     sent,
-            "end_received": received,
-        }
         if score is not None:
-            update_data["final_percentage"] = score
-
-        sb.table("performance_logs").update(update_data).eq("id", existing_log["id"]).execute()
-
-        if score is None:
+            await pool.execute(
+                """
+                UPDATE performance_logs
+                SET end_sent = $1, end_received = $2, final_percentage = $3
+                WHERE id = $4
+                """,
+                sent, received, score, existing_log["id"]
+            )
+        else:
+            await pool.execute(
+                "UPDATE performance_logs SET end_sent = $1, end_received = $2 WHERE id = $3",
+                sent, received, existing_log["id"]
+            )
             await update.message.reply_text("⚠️ Cannot calculate score — sent count hasn't changed.")
             return
 
@@ -251,66 +265,59 @@ async def cmd_stats(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"{'✅ Quality target met!' if score >= MIN_QUALITY_SCORE else f'⚠️ Below {MIN_QUALITY_SCORE}% target.'}",
             parse_mode="Markdown"
         )
-
-        # Notify manager
         await ctx.bot.send_message(
             MANAGER_CHAT_ID,
-            f"📊 Stats update — *@{worker['telegram_username']}*\n"
-            f"Score: {emoji} *{score:.1f}%*",
+            f"📊 Stats update — *@{worker['telegram_username']}*\nScore: {emoji} *{score:.1f}%*",
             parse_mode="Markdown"
         )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /endshift  — worker ends their shift
+# /endshift
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_endshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user   = update.effective_user
-    worker = get_worker_by_chat_id(user.id)
+    worker = await get_worker_by_chat_id(user.id)
     if not worker:
         await update.message.reply_text("❌ Not registered.")
         return
 
-    shift = get_active_shift(worker["id"])
+    shift = await get_active_shift(worker["id"])
     if not shift:
         await update.message.reply_text("❌ No active shift found.")
         return
 
-    now = datetime.now(timezone.utc).isoformat()
+    pool = await get_pool()
+    now  = datetime.now(timezone.utc)
 
-    # Mark shift completed
-    sb.table("shifts").update({
-        "status":   "completed",
-        "end_time": now
-    }).eq("id", shift["id"]).execute()
+    await pool.execute(
+        "UPDATE shifts SET status = 'completed', end_time = $1 WHERE id = $2",
+        now, shift["id"]
+    )
+    await pool.execute(
+        "UPDATE pcs SET status = 'vacant' WHERE id = $1", shift["pc_id"]
+    )
+    await pool.execute(
+        """
+        INSERT INTO unlock_signals (pc_hwid, worker_id, shift_id, action, reason)
+        VALUES ($1, $2, $3, 'lock', 'Shift ended')
+        """,
+        shift["pcs"]["hwid"], worker["id"], shift["id"]
+    )
 
-    # Free the PC
-    sb.table("pcs").update({"status": "vacant"}).eq("id", shift["pc_id"]).execute()
-
-    # Send lock signal to desktop client
-    sb.table("unlock_signals").insert({
-        "pc_hwid":   shift["pcs"]["hwid"],
-        "worker_id": worker["id"],
-        "shift_id":  shift["id"],
-        "action":    "lock",
-        "reason":    "Shift ended",
-    }).execute()
-
-    # Get final score
-    log_entry = (
-        sb.table("performance_logs")
-        .select("final_percentage")
-        .eq("shift_id", shift["id"])
-        .maybe_single()
-        .execute()
-    ).data
-    score_text = f"{log_entry['final_percentage']:.1f}%" if (log_entry and log_entry.get("final_percentage")) else "Not calculated"
+    log_entry = await pool.fetchrow(
+        "SELECT final_percentage FROM performance_logs WHERE shift_id = $1", shift["id"]
+    )
+    score_text = (
+        f"{float(log_entry['final_percentage']):.1f}%"
+        if log_entry and log_entry["final_percentage"] is not None
+        else "Not calculated"
+    )
 
     await update.message.reply_text(
         f"✅ *Shift ended.*\n\n"
         f"PC: `{shift['pcs']['label']}`\n"
-        f"Duration: shift closed\n"
         f"Final score: *{score_text}*\n\n"
         "The PC has been locked. Good work! 👋",
         parse_mode="Markdown"
@@ -318,43 +325,28 @@ async def cmd_endshift(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /unlock  — called by Desktop Client via webhook (internal endpoint)
-#
-# The desktop client sends a POST to a thin HTTP server that calls
-# handle_unlock_request() directly. This command triggers the same logic
-# when a manager types it manually.
+# Core access control (called by HTTP endpoint and /grant)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def handle_unlock_request(
-    bot,
-    worker_username: str,
-    pc_hwid: str,
-    pin: str
+    bot, worker_username: str, pc_hwid: str, pin: str
 ) -> tuple[bool, str]:
-    """
-    Core access control logic.
-    Returns (granted: bool, reason: str).
-    Uses a DB transaction pattern: check + write atomically via Postgres.
-    """
-    worker = get_worker_by_username(worker_username)
+    worker = await get_worker_by_username(worker_username)
     if not worker:
         return False, "Worker not registered in the system."
 
-    pc = get_pc_by_hwid(pc_hwid)
+    pc = await get_pc_by_hwid(pc_hwid)
     if not pc:
         return False, f"PC with HWID `{pc_hwid}` is not registered."
 
-    # Check: PC must be vacant
     if pc["status"] != "vacant":
         return False, f"PC *{pc['label']}* is currently occupied by another worker."
 
-    # Check: worker must not already have an active shift
-    existing_shift = get_active_shift(worker["id"])
+    existing_shift = await get_active_shift(worker["id"])
     if existing_shift:
         return False, "You already have an active shift on another PC."
 
-    # Check: previous shift score ≥ 85%
-    last_score = get_last_shift_score(worker["id"])
+    last_score = await get_last_shift_score(worker["id"])
     if last_score is not None and last_score < MIN_QUALITY_SCORE:
         return False, (
             f"Your last shift score was *{last_score:.1f}%*, "
@@ -362,41 +354,40 @@ async def handle_unlock_request(
             "Please speak with your supervisor."
         )
 
-    # Generate and hash 6-digit PIN
     hashed_pin = hash_pin(pin)
+    pool = await get_pool()
 
-    # ATOMIC: mark PC occupied + create shift in one transaction
-    # Supabase doesn't expose raw transactions in the REST client,
-    # so we use the partial unique index as a concurrency guard.
     try:
-        sb.table("pcs").update({"status": "occupied"}).eq("id", pc["id"]).execute()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "UPDATE pcs SET status = 'occupied' WHERE id = $1", pc["id"]
+                )
+                shift_row = await conn.fetchrow(
+                    """
+                    INSERT INTO shifts (worker_id, pc_id, password_pin, status)
+                    VALUES ($1, $2, $3, 'active')
+                    RETURNING id
+                    """,
+                    worker["id"], pc["id"], hashed_pin
+                )
+                shift_id = shift_row["id"]
 
-        shift_result = sb.table("shifts").insert({
-            "worker_id":    worker["id"],
-            "pc_id":        pc["id"],
-            "password_pin": hashed_pin,
-            "status":       "active",
-        }).execute()
+                await conn.execute(
+                    """
+                    INSERT INTO performance_logs (worker_id, shift_id, start_sent, start_received)
+                    VALUES ($1, $2, 0, 0)
+                    """,
+                    worker["id"], shift_id
+                )
+                await conn.execute(
+                    """
+                    INSERT INTO unlock_signals (pc_hwid, worker_id, shift_id, action)
+                    VALUES ($1, $2, $3, 'unlock')
+                    """,
+                    pc_hwid, worker["id"], shift_id
+                )
 
-        shift_id = shift_result.data[0]["id"]
-
-        # Write initial performance log placeholder
-        sb.table("performance_logs").insert({
-            "worker_id": worker["id"],
-            "shift_id":  shift_id,
-            "start_sent": 0,
-            "start_received": 0,
-        }).execute()
-
-        # Send unlock signal for Supabase Realtime
-        sb.table("unlock_signals").insert({
-            "pc_hwid":   pc_hwid,
-            "worker_id": worker["id"],
-            "shift_id":  shift_id,
-            "action":    "unlock",
-        }).execute()
-
-        # Notify manager
         await bot.send_message(
             MANAGER_CHAT_ID,
             f"🔓 *Access granted*\n"
@@ -408,13 +399,10 @@ async def handle_unlock_request(
         return True, f"Access granted. Shift started on *{pc['label']}*."
 
     except Exception as e:
-        # Rollback PC status if shift insert failed
-        sb.table("pcs").update({"status": "vacant"}).eq("id", pc["id"]).execute()
         log.error(f"Shift creation failed: {e}")
         return False, "System error. Please try again."
 
 
-# Manager command: manually grant/deny access
 async def cmd_grant(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_manager(update.effective_user.id):
         return
@@ -423,19 +411,14 @@ async def cmd_grant(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: `/grant @username PC-HWID`", parse_mode="Markdown")
         return
 
-    username = args[0]
-    hwid     = args[1]
-    pin      = "000000"  # manager override PIN
-
-    granted, reason = await handle_unlock_request(ctx.bot, username, hwid, pin)
+    granted, reason = await handle_unlock_request(ctx.bot, args[0], args[1], "000000")
     await update.message.reply_text(
-        f"{'✅' if granted else '❌'} {reason}",
-        parse_mode="Markdown"
+        f"{'✅' if granted else '❌'} {reason}", parse_mode="Markdown"
     )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /addpc  — manager registers a new PC
+# /addpc
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_addpc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -443,57 +426,73 @@ async def cmd_addpc(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     args = ctx.args
     if len(args) < 2:
-        await update.message.reply_text("Usage: `/addpc HWID PC-Label`\nExample: `/addpc ABC123XYZ PC-01`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "Usage: `/addpc HWID PC-Label`\nExample: `/addpc ABC123XYZ PC-01`",
+            parse_mode="Markdown"
+        )
         return
 
     hwid  = args[0]
     label = " ".join(args[1:])
+    pool  = await get_pool()
 
     try:
-        sb.table("pcs").insert({"hwid": hwid, "label": label}).execute()
-        await update.message.reply_text(f"✅ PC *{label}* (HWID: `{hwid}`) registered.", parse_mode="Markdown")
+        await pool.execute(
+            "INSERT INTO pcs (hwid, label) VALUES ($1, $2)", hwid, label
+        )
+        await update.message.reply_text(
+            f"✅ PC *{label}* (HWID: `{hwid}`) registered.", parse_mode="Markdown"
+        )
+    except asyncpg.UniqueViolationError:
+        await update.message.reply_text(f"❌ A PC with HWID `{hwid}` is already registered.")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: `{e}`", parse_mode="Markdown")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# /status  — manager overview
+# /status
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not is_manager(update.effective_user.id):
-        # Workers see their own status
-        worker = get_worker_by_chat_id(update.effective_user.id)
+        worker = await get_worker_by_chat_id(update.effective_user.id)
         if not worker:
             await update.message.reply_text("Not registered.")
             return
-        shift = get_active_shift(worker["id"])
+        shift = await get_active_shift(worker["id"])
         if shift:
             await update.message.reply_text(
                 f"🟢 Active shift on *{shift['pcs']['label']}*\n"
-                f"Started: {shift['start_time'][:16].replace('T',' ')} UTC",
+                f"Started: {str(shift['start_time'])[:16].replace('T',' ')} UTC",
                 parse_mode="Markdown"
             )
         else:
             await update.message.reply_text("🔘 No active shift.")
         return
 
-    # Manager: full overview
-    pcs     = sb.table("pcs").select("*").execute().data or []
-    shifts  = sb.table("shifts").select("*, workers(*), pcs(*)").eq("status","active").execute().data or []
+    pool = await get_pool()
+    pcs    = await pool.fetch("SELECT * FROM pcs ORDER BY label")
+    shifts = await pool.fetch(
+        """
+        SELECT s.*, w.telegram_username, p.label AS pc_label
+        FROM shifts s
+        JOIN workers w ON w.id = s.worker_id
+        JOIN pcs p ON p.id = s.pc_id
+        WHERE s.status = 'active'
+        """
+    )
 
-    lines = ["📋 *System Status*\n"]
-    lines.append(f"*PCs:* {len(pcs)} registered")
-    occupied_pcs = [s["pcs"]["label"] for s in shifts]
+    occupied_labels = {s["pc_label"] for s in shifts}
+    lines = ["📋 *System Status*\n", f"*PCs:* {len(pcs)} registered"]
 
     for pc in pcs:
-        icon = "🟢" if pc["label"] in occupied_pcs else "⚪"
+        icon = "🟢" if pc["label"] in occupied_labels else "⚪"
         lines.append(f"  {icon} {pc['label']} — {pc['status']}")
 
     if shifts:
         lines.append(f"\n*Active Shifts:* {len(shifts)}")
         for s in shifts:
-            lines.append(f"  • @{s['workers']['telegram_username']} → {s['pcs']['label']}")
+            lines.append(f"  • @{s['telegram_username']} → {s['pc_label']}")
     else:
         lines.append("\n*No active shifts.*")
 
@@ -526,26 +525,16 @@ async def cmd_help(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# HTTP endpoint for Desktop Client auth requests
-# A minimal asyncio HTTP server alongside the bot
+# HTTP endpoint for Desktop Client auth requests (aiohttp on port 8765)
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def http_server(bot):
-    """
-    Minimal HTTP server that the Desktop Client calls to authenticate.
-    Listens on port 8765 (configure firewall to allow only internal traffic).
-
-    POST /auth
-    Body (JSON): {"username": "@alice", "hwid": "ABC123", "pin": "123456"}
-
-    Response (JSON): {"granted": true/false, "reason": "..."}
-    """
     import json
     from aiohttp import web
 
     async def handle_auth(request):
         try:
-            body = await request.json()
+            body    = await request.json()
             username = body.get("username", "")
             hwid     = body.get("hwid", "")
             pin      = body.get("pin", "")
@@ -555,8 +544,7 @@ async def http_server(bot):
 
             granted, reason = await handle_unlock_request(bot, username, hwid, pin)
 
-            # Notify worker via Telegram
-            worker = get_worker_by_username(username)
+            worker = await get_worker_by_username(username)
             if worker and worker.get("telegram_chat_id"):
                 await bot.send_message(
                     worker["telegram_chat_id"],
@@ -570,14 +558,161 @@ async def http_server(bot):
             log.error(f"Auth handler error: {e}")
             return web.json_response({"granted": False, "reason": "Server error."}, status=500)
 
-    app = web.Application()
-    app.router.add_post("/auth", handle_auth)
+    # ── NEW: polling endpoint for Desktop Client ──────────────────────────────
+    # GET /signals?hwid=<hwid>
+    # Returns unconsumed unlock_signals for this PC and marks them consumed.
+    async def handle_signals(request):
+        hwid = request.query.get("hwid", "")
+        if not hwid:
+            return web.json_response([], status=400)
+        try:
+            pool = await get_pool()
+            rows = await pool.fetch(
+                """
+                SELECT id, action, reason FROM unlock_signals
+                WHERE pc_hwid = $1 AND consumed = FALSE
+                ORDER BY created_at DESC LIMIT 5
+                """,
+                hwid
+            )
+            if rows:
+                ids = [str(r["id"]) for r in rows]
+                await pool.execute(
+                    "UPDATE unlock_signals SET consumed = TRUE WHERE id = ANY($1::uuid[])",
+                    ids
+                )
+            return web.json_response([dict(r) for r in rows])
+        except Exception as e:
+            log.error(f"Signals handler error: {e}")
+            return web.json_response([], status=500)
+
+    # ── Portal login endpoint ─────────────────────────────────────────────────
+    async def handle_portal_login(request):
+        """
+        POST /portal-login
+        Body: { "username": "@alice", "pin": "123456" }
+        Returns: { "granted": true, "worker": {...}, "shifts": [...], "perfs": [...] }
+        Workers log into the Vercel portal with their Telegram username + PIN.
+        PIN is verified against their most recent active or completed shift.
+        """
+        try:
+            body     = await request.json()
+            username = body.get("username", "").lstrip("@")
+            pin      = body.get("pin", "")
+
+            if not username or not pin:
+                return web.json_response({"granted": False, "reason": "Username and PIN required."}, status=400)
+
+            pool   = await get_pool()
+            worker = await pool.fetchrow(
+                "SELECT * FROM workers WHERE telegram_username = $1", username
+            )
+            if not worker:
+                return web.json_response({"granted": False, "reason": "Worker not registered. Send /start to the bot first."})
+
+            # Verify PIN against most recent shift
+            shift = await pool.fetchrow(
+                "SELECT * FROM shifts WHERE worker_id = $1 ORDER BY created_at DESC LIMIT 1",
+                worker["id"]
+            )
+            if not shift:
+                return web.json_response({"granted": False, "reason": "No shift found. Ask your supervisor to start a shift first."})
+
+            if not check_pin(pin, shift["password_pin"]):
+                return web.json_response({"granted": False, "reason": "Incorrect PIN."})
+
+            # Load shifts with pc label
+            shifts = await pool.fetch(
+                """
+                SELECT s.id, s.start_time, s.end_time, s.status, p.label AS pc_label
+                FROM shifts s JOIN pcs p ON p.id = s.pc_id
+                WHERE s.worker_id = $1
+                ORDER BY s.created_at DESC LIMIT 30
+                """,
+                worker["id"]
+            )
+            perfs = await pool.fetch(
+                """
+                SELECT pl.*, s.start_time AS shift_date
+                FROM performance_logs pl
+                JOIN shifts s ON s.id = pl.shift_id
+                WHERE pl.worker_id = $1
+                ORDER BY pl.created_at DESC LIMIT 30
+                """,
+                worker["id"]
+            )
+
+            return web.json_response({
+                "granted": True,
+                "worker":  dict(worker),
+                "shifts":  [dict(r) for r in shifts],
+                "perfs":   [dict(r) for r in perfs],
+            }, dumps=lambda obj, **kw: __import__("json").dumps(obj, default=str))
+
+        except Exception as e:
+            log.error(f"Portal login error: {e}")
+            return web.json_response({"granted": False, "reason": "Server error."}, status=500)
+
+    # ── Portal payment update endpoint ────────────────────────────────────────
+    async def handle_portal_payment(request):
+        """
+        POST /portal-payment
+        Body: { "username": "@alice", "mpesa_number": "0712345678", "mpesa_name": "Alice Wanjiru" }
+        """
+        try:
+            body         = await request.json()
+            username     = body.get("username", "").lstrip("@")
+            mpesa_number = body.get("mpesa_number", "").strip()
+            mpesa_name   = body.get("mpesa_name", "").strip()
+
+            if not all([username, mpesa_number, mpesa_name]):
+                return web.json_response({"ok": False, "error": "All fields required."}, status=400)
+
+            pool = await get_pool()
+            result = await pool.execute(
+                "UPDATE workers SET mpesa_number = $1, mpesa_name = $2 WHERE telegram_username = $3",
+                mpesa_number, mpesa_name, username
+            )
+            if result == "UPDATE 0":
+                return web.json_response({"ok": False, "error": "Worker not found."})
+
+            return web.json_response({"ok": True})
+
+        except Exception as e:
+            log.error(f"Portal payment error: {e}")
+            return web.json_response({"ok": False, "error": "Server error."}, status=500)
+
+    # CORS middleware so Vercel portal can call Railway endpoints
+    ALLOWED_ORIGIN = "https://team-elite-bots-prf5iyu4r-workwanyoike-8537s-projects.vercel.app"
+
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            resp = web.Response()
+        else:
+            try:
+                resp = await handler(request)
+            except Exception:
+                resp = web.json_response({"error": "server error"}, status=500)
+        resp.headers["Access-Control-Allow-Origin"]  = ALLOWED_ORIGIN
+        resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    app = web.Application(middlewares=[cors_middleware])
+    app.router.add_route("OPTIONS", "/{path_info:.*}", lambda r: web.Response())
+    app.router.add_post("/auth",           handle_auth)
+    app.router.add_get("/signals",         handle_signals)
+    app.router.add_post("/portal-login",   handle_portal_login)
+    app.router.add_post("/portal-payment", handle_portal_payment)
+    app.router.add_get("/health",          lambda r: web.json_response({"status": "ok"}))
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", 8765)
+    port = int(os.environ.get("PORT", 8765))
+    site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    log.info("Auth HTTP server listening on :8765")
+    log.info(f"Auth HTTP server listening on :{port}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -585,27 +720,28 @@ async def http_server(bot):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def post_init(app: Application):
+    await get_pool()   # warm up connection pool at startup
     asyncio.get_event_loop().create_task(http_server(app.bot))
 
 
 def main():
-    app = (
+    application = (
         Application.builder()
         .token(BOT_TOKEN)
         .post_init(post_init)
         .build()
     )
 
-    app.add_handler(CommandHandler("start",    cmd_start))
-    app.add_handler(CommandHandler("stats",    cmd_stats))
-    app.add_handler(CommandHandler("endshift", cmd_endshift))
-    app.add_handler(CommandHandler("status",   cmd_status))
-    app.add_handler(CommandHandler("help",     cmd_help))
-    app.add_handler(CommandHandler("addpc",    cmd_addpc))
-    app.add_handler(CommandHandler("grant",    cmd_grant))
+    application.add_handler(CommandHandler("start",    cmd_start))
+    application.add_handler(CommandHandler("stats",    cmd_stats))
+    application.add_handler(CommandHandler("endshift", cmd_endshift))
+    application.add_handler(CommandHandler("status",   cmd_status))
+    application.add_handler(CommandHandler("help",     cmd_help))
+    application.add_handler(CommandHandler("addpc",    cmd_addpc))
+    application.add_handler(CommandHandler("grant",    cmd_grant))
 
     log.info("Bot starting…")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
