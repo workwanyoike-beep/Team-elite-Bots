@@ -1,0 +1,1072 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WorkAgent Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:       #0a0a0f;
+  --bg2:      #111118;
+  --bg3:      #18181f;
+  --border:   rgba(255,255,255,0.08);
+  --border2:  rgba(255,255,255,0.14);
+  --text:     #e8e8f2;
+  --muted:    #6b6b80;
+  --accent:   #4f8ef7;
+  --accent2:  #7b5ea7;
+  --success:  #34d399;
+  --warning:  #f59e0b;
+  --danger:   #f87171;
+  --mono:     'IBM Plex Mono', monospace;
+  --sans:     'Space Grotesk', sans-serif;
+}
+
+body{
+  font-family:var(--sans);
+  background:var(--bg);
+  color:var(--text);
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* ── Grid noise overlay ── */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image:
+    radial-gradient(ellipse 80% 60% at 20% 10%, rgba(79,142,247,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 80% at 80% 80%, rgba(123,94,167,0.06) 0%, transparent 60%);
+  pointer-events:none;
+  z-index:0;
+}
+
+/* ── Login screen ── */
+#login-screen{
+  position:fixed;inset:0;
+  display:flex;align-items:center;justify-content:center;
+  z-index:10;
+  background:var(--bg);
+}
+
+.login-card{
+  width:420px;
+  background:var(--bg2);
+  border:1px solid var(--border2);
+  border-radius:20px;
+  padding:52px 44px 44px;
+  position:relative;
+  overflow:hidden;
+}
+.login-card::before{
+  content:'';
+  position:absolute;
+  top:-60px;right:-60px;
+  width:180px;height:180px;
+  background:radial-gradient(circle, rgba(79,142,247,0.15), transparent 70%);
+}
+
+.login-logo{
+  font-family:var(--mono);
+  font-size:13px;
+  letter-spacing:0.15em;
+  color:var(--muted);
+  margin-bottom:28px;
+  display:flex;align-items:center;gap:10px;
+}
+.login-logo::before{
+  content:'';
+  display:inline-block;
+  width:28px;height:28px;
+  border:2px solid var(--accent);
+  border-radius:6px;
+  background:rgba(79,142,247,0.1);
+}
+
+.login-title{
+  font-size:28px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  margin-bottom:8px;
+  background:linear-gradient(135deg,#e8e8f2,#9999bb);
+  -webkit-background-clip:text;
+  -webkit-text-fill-color:transparent;
+}
+
+.login-sub{
+  font-size:14px;
+  color:var(--muted);
+  margin-bottom:36px;
+  line-height:1.5;
+}
+
+.tg-btn{
+  width:100%;
+  padding:14px;
+  background:linear-gradient(135deg,#2563eb,#1d4ed8);
+  border:none;border-radius:12px;
+  color:#fff;font-family:var(--sans);
+  font-size:15px;font-weight:600;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  transition:opacity 0.2s,transform 0.1s;
+}
+.tg-btn:hover{opacity:0.9;transform:translateY(-1px)}
+.tg-btn:active{transform:translateY(0)}
+
+.tg-icon{width:20px;height:20px;fill:#fff}
+
+.login-divider{
+  text-align:center;
+  color:var(--muted);
+  font-size:12px;
+  margin:20px 0;
+  font-family:var(--mono);
+}
+
+.demo-btn{
+  width:100%;
+  padding:12px;
+  background:rgba(255,255,255,0.04);
+  border:1px solid var(--border2);
+  border-radius:12px;
+  color:var(--muted);
+  font-family:var(--sans);font-size:13px;
+  cursor:pointer;
+  transition:all 0.2s;
+}
+.demo-btn:hover{background:rgba(255,255,255,0.07);color:var(--text)}
+
+/* ── Main App ── */
+#app{display:none;min-height:100vh;position:relative;z-index:1}
+
+/* ── Sidebar ── */
+.sidebar{
+  position:fixed;top:0;left:0;bottom:0;
+  width:240px;
+  background:var(--bg2);
+  border-right:1px solid var(--border);
+  display:flex;flex-direction:column;
+  padding:28px 0;
+  z-index:50;
+}
+
+.sidebar-logo{
+  padding:0 24px 28px;
+  border-bottom:1px solid var(--border);
+  margin-bottom:20px;
+}
+.sidebar-logo-text{
+  font-family:var(--mono);
+  font-size:12px;
+  letter-spacing:0.15em;
+  color:var(--accent);
+  text-transform:uppercase;
+}
+.sidebar-logo-sub{
+  font-size:20px;
+  font-weight:700;
+  letter-spacing:-0.03em;
+  color:var(--text);
+  margin-top:4px;
+}
+
+.nav-item{
+  display:flex;align-items:center;gap:12px;
+  padding:11px 24px;
+  color:var(--muted);
+  font-size:14px;
+  font-weight:500;
+  cursor:pointer;
+  border-left:2px solid transparent;
+  transition:all 0.15s;
+  user-select:none;
+}
+.nav-item:hover{color:var(--text);background:rgba(255,255,255,0.03)}
+.nav-item.active{
+  color:var(--accent);
+  border-left-color:var(--accent);
+  background:rgba(79,142,247,0.07);
+}
+.nav-icon{font-size:16px;width:20px;text-align:center}
+
+.sidebar-footer{
+  margin-top:auto;
+  padding:20px 24px 0;
+  border-top:1px solid var(--border);
+}
+.user-chip{
+  display:flex;align-items:center;gap:10px;
+  padding:10px;
+  background:var(--bg3);
+  border-radius:10px;
+  border:1px solid var(--border);
+}
+.user-avatar{
+  width:32px;height:32px;
+  border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:700;color:#fff;
+  flex-shrink:0;
+}
+.user-name{font-size:13px;font-weight:600;color:var(--text)}
+.user-role{font-size:11px;color:var(--muted);font-family:var(--mono)}
+
+.logout-btn{
+  width:100%;margin-top:10px;
+  padding:8px;
+  background:none;border:1px solid var(--border);
+  border-radius:8px;
+  color:var(--muted);font-family:var(--sans);font-size:12px;
+  cursor:pointer;transition:all 0.15s;
+}
+.logout-btn:hover{border-color:var(--danger);color:var(--danger)}
+
+/* ── Main content ── */
+.main{
+  margin-left:240px;
+  padding:40px 48px;
+  min-height:100vh;
+}
+
+.page{display:none}
+.page.active{display:block}
+
+.page-header{
+  margin-bottom:36px;
+}
+.page-title{
+  font-size:26px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  color:var(--text);
+}
+.page-sub{
+  font-size:14px;
+  color:var(--muted);
+  margin-top:6px;
+}
+
+/* ── Stat cards ── */
+.stat-grid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:16px;
+  margin-bottom:36px;
+}
+.stat-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:22px 24px;
+  position:relative;
+  overflow:hidden;
+}
+.stat-card::after{
+  content:'';
+  position:absolute;top:0;left:0;right:0;
+  height:2px;
+  background:var(--accent-color,var(--accent));
+}
+.stat-label{
+  font-size:11px;
+  font-family:var(--mono);
+  letter-spacing:0.1em;
+  color:var(--muted);
+  text-transform:uppercase;
+  margin-bottom:10px;
+}
+.stat-value{
+  font-size:28px;
+  font-weight:700;
+  letter-spacing:-0.02em;
+  color:var(--text);
+}
+.stat-unit{font-size:14px;font-weight:400;color:var(--muted);margin-left:4px}
+.stat-change{font-size:12px;margin-top:6px;color:var(--muted)}
+.stat-change.up{color:var(--success)}
+.stat-change.down{color:var(--danger)}
+
+/* ── Table ── */
+.table-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:14px;
+  overflow:hidden;
+  margin-bottom:28px;
+}
+.table-header{
+  padding:20px 24px;
+  border-bottom:1px solid var(--border);
+  display:flex;align-items:center;justify-content:space-between;
+}
+.table-title{font-size:15px;font-weight:600;color:var(--text)}
+.table-count{
+  font-size:11px;font-family:var(--mono);
+  padding:4px 10px;
+  background:var(--bg3);
+  border:1px solid var(--border);
+  border-radius:20px;
+  color:var(--muted);
+}
+table{width:100%;border-collapse:collapse}
+thead th{
+  padding:12px 24px;
+  text-align:left;
+  font-size:11px;
+  font-family:var(--mono);
+  letter-spacing:0.08em;
+  color:var(--muted);
+  text-transform:uppercase;
+  border-bottom:1px solid var(--border);
+  background:var(--bg3);
+  font-weight:500;
+}
+tbody tr{border-bottom:1px solid rgba(255,255,255,0.04);transition:background 0.1s}
+tbody tr:hover{background:rgba(255,255,255,0.02)}
+tbody tr:last-child{border-bottom:none}
+tbody td{
+  padding:14px 24px;
+  font-size:13px;
+  color:var(--text);
+}
+.td-mono{font-family:var(--mono);font-size:12px}
+.td-muted{color:var(--muted)}
+
+.score-pill{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:4px 10px;
+  border-radius:20px;
+  font-size:12px;
+  font-weight:600;
+  font-family:var(--mono);
+}
+.score-pill.good{background:rgba(52,211,153,0.12);color:var(--success);border:1px solid rgba(52,211,153,0.3)}
+.score-pill.warn{background:rgba(245,158,11,0.12);color:var(--warning);border:1px solid rgba(245,158,11,0.3)}
+.score-pill.bad{background:rgba(248,113,113,0.12);color:var(--danger);border:1px solid rgba(248,113,113,0.3)}
+.score-pill.none{background:rgba(255,255,255,0.05);color:var(--muted);border:1px solid var(--border)}
+
+.status-dot{
+  width:6px;height:6px;
+  border-radius:50%;
+  display:inline-block;margin-right:6px;
+}
+.status-dot.active{background:var(--success);box-shadow:0 0 6px var(--success)}
+.status-dot.completed{background:var(--muted)}
+.status-dot.denied{background:var(--danger)}
+
+/* ── Form card ── */
+.form-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:28px 32px;
+  max-width:500px;
+}
+.form-group{margin-bottom:20px}
+.form-label{
+  display:block;
+  font-size:12px;
+  font-family:var(--mono);
+  color:var(--muted);
+  letter-spacing:0.08em;
+  text-transform:uppercase;
+  margin-bottom:8px;
+}
+.form-input{
+  width:100%;
+  padding:12px 16px;
+  background:var(--bg3);
+  border:1px solid var(--border2);
+  border-radius:10px;
+  color:var(--text);
+  font-family:var(--sans);font-size:14px;
+  outline:none;
+  transition:border-color 0.15s;
+}
+.form-input:focus{border-color:var(--accent)}
+.form-input::placeholder{color:var(--muted)}
+.form-hint{font-size:12px;color:var(--muted);margin-top:6px}
+
+.save-btn{
+  padding:12px 28px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  border:none;border-radius:10px;
+  color:#fff;font-family:var(--sans);
+  font-size:14px;font-weight:600;
+  cursor:pointer;transition:opacity 0.2s,transform 0.1s;
+}
+.save-btn:hover{opacity:0.9;transform:translateY(-1px)}
+.save-btn:active{transform:translateY(0)}
+
+.toast{
+  position:fixed;bottom:32px;right:32px;
+  background:var(--bg3);
+  border:1px solid var(--success);
+  border-radius:12px;
+  padding:14px 20px;
+  font-size:14px;color:var(--success);
+  z-index:999;
+  transform:translateY(20px);opacity:0;
+  transition:all 0.3s;
+}
+.toast.show{transform:translateY(0);opacity:1}
+
+/* ── Score bar ── */
+.score-bar-wrap{
+  background:var(--bg3);
+  border-radius:4px;
+  height:6px;
+  width:120px;
+  display:inline-block;
+  overflow:hidden;
+}
+.score-bar{
+  height:100%;border-radius:4px;
+  transition:width 0.6s;
+}
+
+/* ── Empty state ── */
+.empty{
+  padding:60px 24px;
+  text-align:center;
+  color:var(--muted);
+}
+.empty-icon{font-size:36px;margin-bottom:12px}
+.empty-text{font-size:14px}
+
+/* ── Activity chart (CSS only) ── */
+.chart-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-bottom:28px;
+}
+.chart-card{
+  background:var(--bg2);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:22px 24px;
+}
+.chart-title{font-size:14px;font-weight:600;margin-bottom:16px;color:var(--text)}
+.bar-chart{display:flex;align-items:flex-end;gap:6px;height:80px}
+.bar-col{
+  flex:1;
+  border-radius:4px 4px 0 0;
+  transition:height 0.6s;
+  cursor:pointer;
+  position:relative;
+}
+.bar-col:hover::after{
+  content:attr(data-val);
+  position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+  background:var(--bg3);border:1px solid var(--border2);
+  border-radius:6px;padding:3px 7px;
+  font-size:11px;font-family:var(--mono);color:var(--text);
+  white-space:nowrap;pointer-events:none;
+}
+.bar-labels{display:flex;gap:6px;margin-top:6px}
+.bar-lbl{flex:1;text-align:center;font-size:10px;font-family:var(--mono);color:var(--muted)}
+
+</style>
+</head>
+<body>
+
+<!-- ═══ LOGIN ═══ -->
+<div id="login-screen">
+  <div class="login-card">
+    <div class="login-logo">
+      <span>WORKAGENT PORTAL</span>
+    </div>
+    <h1 class="login-title">Welcome back</h1>
+    <p class="login-sub">Sign in with your Telegram account to access your shift dashboard and performance data.</p>
+
+    <button class="tg-btn" onclick="telegramLogin()">
+      <svg class="tg-icon" viewBox="0 0 24 24"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.448 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.333-.373-.12L7.17 13.37l-2.95-.924c-.64-.203-.658-.64.135-.954l11.57-4.461c.537-.194 1.006.131.97.19z"/></svg>
+      Continue with Telegram
+    </button>
+
+    <div class="login-divider">── or ──</div>
+
+    <button class="demo-btn" onclick="demoLogin()">
+      Preview as Demo Worker
+    </button>
+  </div>
+</div>
+
+<!-- ═══ MAIN APP ═══ -->
+<div id="app">
+  <!-- Sidebar -->
+  <nav class="sidebar">
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-text">WORKAGENT</div>
+      <div class="sidebar-logo-sub">Portal</div>
+    </div>
+
+    <div class="nav-item active" onclick="showPage('dashboard',this)">
+      <span class="nav-icon">⌂</span> Dashboard
+    </div>
+    <div class="nav-item" onclick="showPage('shifts',this)">
+      <span class="nav-icon">⟳</span> My Shifts
+    </div>
+    <div class="nav-item" onclick="showPage('performance',this)">
+      <span class="nav-icon">◈</span> Performance
+    </div>
+    <div class="nav-item" onclick="showPage('payment',this)">
+      <span class="nav-icon">◎</span> Payment Info
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-chip">
+        <div class="user-avatar" id="sidebar-avatar">DW</div>
+        <div>
+          <div class="user-name" id="sidebar-name">Demo Worker</div>
+          <div class="user-role" id="sidebar-role">@demo_worker</div>
+        </div>
+      </div>
+      <button class="logout-btn" onclick="logout()">Sign out</button>
+    </div>
+  </nav>
+
+  <!-- Main -->
+  <main class="main">
+
+    <!-- ── DASHBOARD ── -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <div class="page-title" id="dash-greeting">Good afternoon 👋</div>
+        <div class="page-sub">Here's your performance overview.</div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card" style="--accent-color:#4f8ef7">
+          <div class="stat-label">Total Shifts</div>
+          <div class="stat-value" id="stat-shifts">0</div>
+          <div class="stat-change" id="stat-shifts-sub">all time</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#34d399">
+          <div class="stat-label">Avg. Score</div>
+          <div class="stat-value" id="stat-avg">—<span class="stat-unit">%</span></div>
+          <div class="stat-change" id="stat-avg-sub">last 30 days</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#f59e0b">
+          <div class="stat-label">Best Score</div>
+          <div class="stat-value" id="stat-best">—<span class="stat-unit">%</span></div>
+          <div class="stat-change">personal best</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#7b5ea7">
+          <div class="stat-label">Hours Worked</div>
+          <div class="stat-value" id="stat-hours">0<span class="stat-unit">h</span></div>
+          <div class="stat-change">total logged</div>
+        </div>
+      </div>
+
+      <!-- Recent scores chart -->
+      <div class="chart-grid">
+        <div class="chart-card">
+          <div class="chart-title">Last 7 shifts — quality score</div>
+          <div class="bar-chart" id="score-bars"></div>
+          <div class="bar-labels" id="score-bar-labels"></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Active shift status</div>
+          <div id="active-shift-panel" style="padding-top:8px;color:var(--muted);font-size:14px;">
+            No active shift right now.
+          </div>
+        </div>
+      </div>
+
+      <!-- Recent shifts mini-table -->
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Recent shifts</span>
+          <span class="table-count" id="recent-count">0 shifts</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>PC</th>
+              <th>Duration</th>
+              <th>Score</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="recent-tbody">
+            <tr><td colspan="5" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── SHIFTS ── -->
+    <div class="page" id="page-shifts">
+      <div class="page-header">
+        <div class="page-title">My Shifts</div>
+        <div class="page-sub">Complete history of all your work sessions.</div>
+      </div>
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Shift history</span>
+          <span class="table-count" id="shifts-count">0 shifts</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Shift ID</th>
+              <th>Date &amp; Time</th>
+              <th>PC</th>
+              <th>Duration</th>
+              <th>Messages Sent</th>
+              <th>Received</th>
+              <th>Score</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="shifts-tbody">
+            <tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── PERFORMANCE ── -->
+    <div class="page" id="page-performance">
+      <div class="page-header">
+        <div class="page-title">Performance</div>
+        <div class="page-sub">Your quality metrics over time. Target: ≥ 85% per shift.</div>
+      </div>
+
+      <div class="stat-grid">
+        <div class="stat-card" style="--accent-color:#34d399">
+          <div class="stat-label">Shifts ≥ 85%</div>
+          <div class="stat-value" id="perf-passing">0</div>
+          <div class="stat-change up" id="perf-rate">—% pass rate</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#f87171">
+          <div class="stat-label">Shifts &lt; 85%</div>
+          <div class="stat-value" id="perf-failing">0</div>
+          <div class="stat-change">need improvement</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#4f8ef7">
+          <div class="stat-label">Avg. Score</div>
+          <div class="stat-value" id="perf-avg">—<span class="stat-unit">%</span></div>
+          <div class="stat-change">all time</div>
+        </div>
+        <div class="stat-card" style="--accent-color:#f59e0b">
+          <div class="stat-label">Streak</div>
+          <div class="stat-value" id="perf-streak">0</div>
+          <div class="stat-change">shifts above target</div>
+        </div>
+      </div>
+
+      <div class="table-card">
+        <div class="table-header">
+          <span class="table-title">Performance log</span>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Shift</th>
+              <th>Start Stats</th>
+              <th>End Stats</th>
+              <th>Sent Δ</th>
+              <th>Received Δ</th>
+              <th>Score</th>
+              <th>Quality</th>
+            </tr>
+          </thead>
+          <tbody id="perf-tbody">
+            <tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No performance data yet</div></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── PAYMENT ── -->
+    <div class="page" id="page-payment">
+      <div class="page-header">
+        <div class="page-title">Payment Information</div>
+        <div class="page-sub">Your M-Pesa details for salary payments. Only you can see this.</div>
+      </div>
+
+      <div class="form-card">
+        <div class="form-group">
+          <label class="form-label">M-Pesa Phone Number</label>
+          <input class="form-input" id="mpesa-number" type="tel" placeholder="e.g. 0712345678" maxlength="15">
+          <div class="form-hint">Your registered M-Pesa number (Safaricom)</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account Holder Name</label>
+          <input class="form-input" id="mpesa-name" type="text" placeholder="Full name on M-Pesa account">
+          <div class="form-hint">Must match the name on your SIM card</div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Telegram Username</label>
+          <input class="form-input" id="tg-username" type="text" readonly style="opacity:0.5;cursor:not-allowed">
+          <div class="form-hint">Linked automatically — cannot be changed</div>
+        </div>
+
+        <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+          <button class="save-btn" onclick="savePayment()">Save Payment Info</button>
+          <span id="payment-status" style="font-size:13px;color:var(--muted)"></span>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════════════════════
+
+const STATE = {
+  user: null,
+  shifts: [],
+  perfLogs: [],
+};
+
+// ── Demo data ─────────────────────────────────────────────────────────────────
+function generateDemoData() {
+  const now = Date.now();
+  const day  = 86400000;
+  const shifts = [];
+  const perfs  = [];
+
+  const scores = [91,87,76,95,88,82,93,78,89,96,84,72,90,88,91];
+
+  for (let i = 0; i < 12; i++) {
+    const start  = new Date(now - (i + 1) * day * 1.3);
+    const end    = new Date(start.getTime() + (6 + Math.random() * 3) * 3600000);
+    const score  = scores[i] ?? Math.floor(70 + Math.random() * 28);
+    const sentD  = 80 + Math.floor(Math.random() * 60);
+    const recvD  = Math.round(sentD * score / 100);
+    const sId    = 'shift-' + i;
+    shifts.push({
+      id:          sId,
+      pc_label:    `PC-0${(i % 5) + 1}`,
+      start_time:  start.toISOString(),
+      end_time:    end.toISOString(),
+      status:      'completed',
+      duration_h:  ((end - start) / 3600000).toFixed(1),
+    });
+    perfs.push({
+      id:                 'perf-' + i,
+      shift_id:           sId,
+      shift_date:         start.toISOString(),
+      start_sent:         200 + i * 40,
+      start_received:     180 + i * 35,
+      end_sent:           200 + i * 40 + sentD,
+      end_received:       180 + i * 35 + recvD,
+      final_percentage:   score,
+    });
+  }
+  return { shifts, perfs };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTH
+// ══════════════════════════════════════════════════════════════════════════════
+
+function telegramLogin() {
+  // In production: window.location = 'https://your-next-app.com/api/auth/telegram'
+  showToast('Telegram OAuth would redirect here in production.');
+  demoLogin();
+}
+
+function demoLogin() {
+  const { shifts, perfs } = generateDemoData();
+  STATE.user = {
+    name:     'Demo Worker',
+    username: '@demo_worker',
+    initials: 'DW',
+    mpesa_number: '0712345678',
+    mpesa_name:   'Demo Worker',
+  };
+  STATE.shifts   = shifts;
+  STATE.perfLogs = perfs;
+
+  document.getElementById('login-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+
+  populateUser();
+  renderDashboard();
+  renderShifts();
+  renderPerformance();
+  renderPayment();
+  setGreeting();
+}
+
+function logout() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  STATE.user = null;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// NAVIGATION
+// ══════════════════════════════════════════════════════════════════════════════
+
+function showPage(id, navEl) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + id).classList.add('active');
+  navEl.classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RENDER HELPERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+function setGreeting() {
+  const h = new Date().getHours();
+  const g = h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+  document.getElementById('dash-greeting').textContent = g + ' 👋';
+}
+
+function populateUser() {
+  const u = STATE.user;
+  document.getElementById('sidebar-avatar').textContent = u.initials;
+  document.getElementById('sidebar-name').textContent   = u.name;
+  document.getElementById('sidebar-role').textContent   = u.username;
+}
+
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString('en-KE', {day:'2-digit',month:'short',year:'numeric'});
+}
+function fmtTime(iso) {
+  return new Date(iso).toLocaleTimeString('en-KE', {hour:'2-digit',minute:'2-digit'});
+}
+
+function scoreClass(s) {
+  if (s === null || s === undefined) return 'none';
+  return s >= 85 ? 'good' : s >= 70 ? 'warn' : 'bad';
+}
+function scorePill(s) {
+  if (s === null || s === undefined)
+    return `<span class="score-pill none">No data</span>`;
+  const cls = scoreClass(s);
+  const dot = cls === 'good' ? '●' : cls === 'warn' ? '◐' : '○';
+  return `<span class="score-pill ${cls}">${dot} ${Number(s).toFixed(1)}%</span>`;
+}
+
+function statusBadge(status) {
+  const m = {active:'active',completed:'completed',denied:'denied'};
+  const c = m[status] || 'completed';
+  return `<span><span class="status-dot ${c}"></span>${status}</span>`;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderDashboard() {
+  const shifts = STATE.shifts;
+  const perfs  = STATE.perfLogs;
+
+  const totalShifts = shifts.length;
+  const scores = perfs.map(p => p.final_percentage).filter(s => s != null);
+  const avg    = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null;
+  const best   = scores.length ? Math.max(...scores).toFixed(1) : null;
+  const hours  = shifts.reduce((a,s) => a + parseFloat(s.duration_h||0), 0).toFixed(0);
+
+  document.getElementById('stat-shifts').textContent = totalShifts;
+  document.getElementById('stat-avg').innerHTML    = avg ? `${avg}<span class="stat-unit">%</span>` : '—';
+  document.getElementById('stat-best').innerHTML   = best ? `${best}<span class="stat-unit">%</span>` : '—';
+  document.getElementById('stat-hours').innerHTML  = `${hours}<span class="stat-unit">h</span>`;
+
+  if (avg >= 85) {
+    document.getElementById('stat-avg').closest('.stat-card').style.setProperty('--accent-color','#34d399');
+  } else if (avg) {
+    document.getElementById('stat-avg').closest('.stat-card').style.setProperty('--accent-color','#f59e0b');
+  }
+
+  // Bar chart — last 7 perfs
+  const last7 = perfs.slice(0,7).reverse();
+  const barsEl  = document.getElementById('score-bars');
+  const lblsEl  = document.getElementById('score-bar-labels');
+  const maxScore = Math.max(...last7.map(p=>p.final_percentage||0), 100);
+
+  barsEl.innerHTML = last7.map(p => {
+    const s   = p.final_percentage || 0;
+    const pct = (s / maxScore * 100).toFixed(0);
+    const col = s >= 85 ? 'var(--success)' : s >= 70 ? 'var(--warning)' : 'var(--danger)';
+    return `<div class="bar-col" data-val="${s.toFixed(1)}%"
+      style="height:${pct}%;background:${col};opacity:0.8"></div>`;
+  }).join('');
+
+  lblsEl.innerHTML = last7.map(p => {
+    const d = new Date(p.shift_date);
+    return `<span class="bar-lbl">${d.getDate()}/${d.getMonth()+1}</span>`;
+  }).join('');
+
+  // Recent shifts
+  const recent = shifts.slice(0,5);
+  document.getElementById('recent-count').textContent = `${totalShifts} shift${totalShifts!==1?'s':''}`;
+  const tbody = document.getElementById('recent-tbody');
+  if (!recent.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>`;
+    return;
+  }
+  tbody.innerHTML = recent.map(s => {
+    const perf = perfs.find(p => p.shift_id === s.id);
+    const score = perf ? perf.final_percentage : null;
+    return `<tr>
+      <td>${fmtDate(s.start_time)}</td>
+      <td class="td-mono">${s.pc_label}</td>
+      <td class="td-muted">${s.duration_h}h</td>
+      <td>${scorePill(score)}</td>
+      <td>${statusBadge(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SHIFTS TABLE
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderShifts() {
+  const shifts = STATE.shifts;
+  const perfs  = STATE.perfLogs;
+  document.getElementById('shifts-count').textContent = `${shifts.length} shift${shifts.length!==1?'s':''}`;
+
+  const tbody = document.getElementById('shifts-tbody');
+  if (!shifts.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No shifts yet</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = shifts.map(s => {
+    const perf  = perfs.find(p => p.shift_id === s.id);
+    const score = perf ? perf.final_percentage : null;
+    const sentD = perf ? perf.end_sent   - perf.start_sent   : '—';
+    const recvD = perf ? perf.end_received - perf.start_received : '—';
+    return `<tr>
+      <td class="td-mono td-muted">${s.id.slice(-8)}</td>
+      <td>${fmtDate(s.start_time)}<br><span class="td-mono td-muted" style="font-size:11px">${fmtTime(s.start_time)}</span></td>
+      <td class="td-mono">${s.pc_label}</td>
+      <td class="td-muted">${s.duration_h}h</td>
+      <td class="td-mono">${typeof sentD==='number' ? sentD : '—'}</td>
+      <td class="td-mono">${typeof recvD==='number' ? recvD : '—'}</td>
+      <td>${scorePill(score)}</td>
+      <td>${statusBadge(s.status)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PERFORMANCE
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderPerformance() {
+  const perfs = STATE.perfLogs;
+  const scores = perfs.map(p=>p.final_percentage).filter(s=>s!=null);
+
+  const passing = scores.filter(s => s >= 85).length;
+  const failing = scores.filter(s => s < 85).length;
+  const avg     = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(1) : null;
+  const rate    = scores.length ? ((passing/scores.length)*100).toFixed(0) : null;
+
+  // Streak: consecutive recent shifts ≥ 85
+  let streak = 0;
+  for (const p of perfs) {
+    if ((p.final_percentage||0) >= 85) streak++;
+    else break;
+  }
+
+  document.getElementById('perf-passing').textContent = passing;
+  document.getElementById('perf-failing').textContent = failing;
+  document.getElementById('perf-avg').innerHTML = avg ? `${avg}<span class="stat-unit">%</span>` : '—';
+  document.getElementById('perf-streak').textContent = streak;
+  document.getElementById('perf-rate').textContent = rate ? `${rate}% pass rate` : '—';
+  document.getElementById('perf-rate').className = 'stat-change ' + (rate >= 85 ? 'up' : 'down');
+
+  const tbody = document.getElementById('perf-tbody');
+  if (!perfs.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="empty"><div class="empty-icon">◌</div><div class="empty-text">No performance data yet</div></td></tr>`;
+    return;
+  }
+
+  tbody.innerHTML = perfs.map(p => {
+    const s    = p.final_percentage;
+    const sentD = p.end_sent - p.start_sent;
+    const recvD = p.end_received - p.start_received;
+    const barW  = s ? Math.min(s,100) : 0;
+    const barC  = s >= 85 ? 'var(--success)' : s >= 70 ? 'var(--warning)' : 'var(--danger)';
+    return `<tr>
+      <td>${fmtDate(p.shift_date)}</td>
+      <td class="td-mono td-muted">${p.shift_id.slice(-8)}</td>
+      <td class="td-mono">${p.start_sent} / ${p.start_received}</td>
+      <td class="td-mono">${p.end_sent} / ${p.end_received}</td>
+      <td class="td-mono">${sentD}</td>
+      <td class="td-mono">${recvD}</td>
+      <td>${scorePill(s)}</td>
+      <td>
+        <div class="score-bar-wrap">
+          <div class="score-bar" style="width:${barW}%;background:${barC}"></div>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PAYMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+function renderPayment() {
+  const u = STATE.user;
+  document.getElementById('mpesa-number').value = u.mpesa_number || '';
+  document.getElementById('mpesa-name').value   = u.mpesa_name   || '';
+  document.getElementById('tg-username').value  = u.username     || '';
+}
+
+async function savePayment() {
+  const number = document.getElementById('mpesa-number').value.trim();
+  const name   = document.getElementById('mpesa-name').value.trim();
+  const status = document.getElementById('payment-status');
+
+  if (!number || !name) {
+    status.style.color = 'var(--danger)';
+    status.textContent = 'Please fill in all fields.';
+    return;
+  }
+
+  // In production: POST to /api/worker/payment with Supabase RLS ensuring worker owns the row
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Saving…';
+
+  await new Promise(r => setTimeout(r, 800)); // simulate network
+
+  STATE.user.mpesa_number = number;
+  STATE.user.mpesa_name   = name;
+  status.style.color = 'var(--success)';
+  status.textContent = '✓ Saved';
+  showToast('M-Pesa details saved successfully.');
+  setTimeout(() => { status.textContent = '' }, 3000);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════════════════════════════════════
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 3500);
+}
+</script>
+</body>
+</html>
